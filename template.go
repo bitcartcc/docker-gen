@@ -31,6 +31,21 @@ func exists(path string) (bool, error) {
 	return false, err
 }
 
+func read(path string) (string, error) {
+	_, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+        return "", err
+    }
+	return string(b), nil
+}
+
 func getArrayValues(funcName string, entries interface{}) (*reflect.Value, error) {
 	entriesVal := reflect.ValueOf(entries)
 
@@ -83,7 +98,9 @@ func groupByMulti(entries interface{}, key, sep string) (map[string][]interface{
 	return generalizedGroupByKey("groupByMulti", entries, key, func(groups map[string][]interface{}, value interface{}, v interface{}) {
 		items := strings.Split(value.(string), sep)
 		for _, item := range items {
-			groups[item] = append(groups[item], v)
+			if item != "" {
+				groups[item] = append(groups[item], v)
+			}
 		}
 	})
 }
@@ -394,6 +411,16 @@ func coalesce(input ...interface{}) interface{} {
 	return nil
 }
 
+// coalesceempty returns the first non nil argument or empty
+func coalesceempty(input ...interface{}) interface{} {
+	for _, v := range input {
+		if v != nil && len(fmt.Sprintf("%v", v)) > 0 {
+			return v
+		}
+	}
+	return nil
+}
+
 // trimPrefix returns a string without the prefix, if present
 func trimPrefix(prefix, s string) string {
 	return strings.TrimPrefix(s, prefix)
@@ -422,10 +449,12 @@ func newTemplate(name string) *template.Template {
 	tmpl := template.New(name).Funcs(template.FuncMap{
 		"closest":                arrayClosest,
 		"coalesce":               coalesce,
+		"coalesceempty":          coalesceempty,
 		"contains":               contains,
 		"dict":                   dict,
 		"dir":                    dirList,
 		"exists":                 exists,
+		"read":                   read,
 		"first":                  arrayFirst,
 		"groupBy":                groupBy,
 		"groupByKeys":            groupByKeys,
@@ -517,7 +546,16 @@ func GenerateFile(config Config, containers Context) bool {
 		}
 
 		oldContents := []byte{}
-		if fi, err := os.Stat(config.Dest); err == nil {
+		if fi, err := os.Stat(config.Dest); err == nil || os.IsNotExist(err) {
+			if (err != nil && os.IsNotExist(err)) {
+				emptyFile, err := os.Create(config.Dest)
+				if err != nil {
+					log.Fatalf("Unable to create empty destination file: %s\n", err)
+				} else {
+					emptyFile.Close()
+					fi, err = os.Stat(config.Dest)
+				}
+			}
 			if err := dest.Chmod(fi.Mode()); err != nil {
 				log.Fatalf("Unable to chmod temp file: %s\n", err)
 			}
