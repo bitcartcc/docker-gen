@@ -20,17 +20,6 @@ import (
 	"text/template"
 )
 
-func exists(path string) (bool, error) {
-	_, err := os.Stat(path)
-	if err == nil {
-		return true, nil
-	}
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	return false, err
-}
-
 func read(path string) (string, error) {
 	_, err := os.Stat(path)
 	if err != nil {
@@ -41,8 +30,8 @@ func read(path string) (string, error) {
 	}
 	b, err := ioutil.ReadFile(path)
 	if err != nil {
-        return "", err
-    }
+		return "", err
+	}
 	return string(b), nil
 }
 
@@ -60,7 +49,7 @@ func getArrayValues(funcName string, entries interface{}) (*reflect.Value, error
 	case reflect.Array, reflect.Slice:
 		break
 	default:
-		return nil, fmt.Errorf("Must pass an array or slice to '%v'; received %v; kind %v", funcName, entries, kind)
+		return nil, fmt.Errorf("must pass an array or slice to '%v'; received %v; kind %v", funcName, entries, kind)
 	}
 	return &entriesVal, nil
 }
@@ -138,7 +127,7 @@ func groupByLabel(entries interface{}, label string) (map[string][]interface{}, 
 			}
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Must pass an array or slice of RuntimeContainer to 'groupByLabel'; received %v", v)
+		return nil, fmt.Errorf("must pass an array or slice of RuntimeContainer to 'groupByLabel'; received %v", v)
 	}
 	return generalizedGroupBy("groupByLabel", entries, getLabel, func(groups map[string][]interface{}, value interface{}, v interface{}) {
 		groups[value.(string)] = append(groups[value.(string)], v)
@@ -278,7 +267,7 @@ func keys(input interface{}) (interface{}, error) {
 
 	val := reflect.ValueOf(input)
 	if val.Kind() != reflect.Map {
-		return nil, fmt.Errorf("Cannot call keys on a non-map value: %v", input)
+		return nil, fmt.Errorf("cannot call keys on a non-map value: %v", input)
 	}
 
 	vk := val.MapKeys()
@@ -308,10 +297,20 @@ func intersect(l1, l2 []string) []string {
 	return keys
 }
 
-func contains(item map[string]string, key string) bool {
-	if _, ok := item[key]; ok {
-		return true
+func contains(input interface{}, key interface{}) bool {
+	if input == nil {
+		return false
 	}
+
+	val := reflect.ValueOf(input)
+	if val.Kind() == reflect.Map {
+		for _, k := range val.MapKeys() {
+			if k.Interface() == key {
+				return true
+			}
+		}
+	}
+
 	return false
 }
 
@@ -436,6 +435,16 @@ func trim(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// toLower return the string in lower case
+func toLower(s string) string {
+	return strings.ToLower(s)
+}
+
+// toUpper return the string in upper case
+func toUpper(s string) string {
+	return strings.ToUpper(s)
+}
+
 // when returns the trueValue when the condition is true and the falseValue otherwise
 func when(condition bool, trueValue, falseValue interface{}) interface{} {
 	if condition {
@@ -453,7 +462,7 @@ func newTemplate(name string) *template.Template {
 		"contains":               contains,
 		"dict":                   dict,
 		"dir":                    dirList,
-		"exists":                 exists,
+		"exists":                 pathExists,
 		"read":                   read,
 		"first":                  arrayFirst,
 		"groupBy":                groupBy,
@@ -476,6 +485,8 @@ func newTemplate(name string) *template.Template {
 		"trimPrefix":             trimPrefix,
 		"trimSuffix":             trimSuffix,
 		"trim":                   trim,
+		"toLower":                toLower,
+		"toUpper":                toUpper,
 		"when":                   when,
 		"where":                  where,
 		"whereNot":               whereNot,
@@ -547,13 +558,13 @@ func GenerateFile(config Config, containers Context) bool {
 
 		oldContents := []byte{}
 		if fi, err := os.Stat(config.Dest); err == nil || os.IsNotExist(err) {
-			if (err != nil && os.IsNotExist(err)) {
+			if err != nil && os.IsNotExist(err) {
 				emptyFile, err := os.Create(config.Dest)
 				if err != nil {
 					log.Fatalf("Unable to create empty destination file: %s\n", err)
 				} else {
 					emptyFile.Close()
-					fi, err = os.Stat(config.Dest)
+					fi, _ = os.Stat(config.Dest)
 				}
 			}
 			if err := dest.Chmod(fi.Mode()); err != nil {
@@ -568,7 +579,7 @@ func GenerateFile(config Config, containers Context) bool {
 			}
 		}
 
-		if bytes.Compare(oldContents, contents) != 0 {
+		if !bytes.Equal(oldContents, contents) {
 			err = os.Rename(dest.Name(), config.Dest)
 			if err != nil {
 				log.Fatalf("Unable to create dest file %s: %s\n", config.Dest, err)

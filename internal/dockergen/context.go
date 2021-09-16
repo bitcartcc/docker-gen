@@ -2,11 +2,12 @@ package dockergen
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"regexp"
 	"sync"
 
-	"github.com/fsouza/go-dockerclient"
+	docker "github.com/fsouza/go-dockerclient"
 )
 
 var (
@@ -158,55 +159,83 @@ type Docker struct {
 	CurrentContainerID string
 }
 
-func GetCurrentContainerID() string {
-	file, err := os.Open("/proc/self/cgroup")
-
-	if err != nil {
-		return ""
+// GetCurrentContainerID attempts to extract the current container ID from the provided file paths.
+// If no files paths are provided, it will default to /proc/1/cpuset, /proc/self/cgroup and /proc/self/mountinfo.
+// It attempts to match the HOSTNAME first then use the fallback method, and returns with the first valid match.
+func GetCurrentContainerID(filepaths ...string) (id string) {
+	if len(filepaths) == 0 {
+		filepaths = []string{"/proc/1/cpuset", "/proc/self/cgroup", "/proc/self/mountinfo"}
 	}
 
-	reader := bufio.NewReader(file)
-	scanner := bufio.NewScanner(reader)
-	scanner.Split(bufio.ScanLines)
-
-	for scanner.Scan() {
-		_, lines, err := bufio.ScanLines([]byte(scanner.Text()), true)
-		if err == nil {
-			strLines := string(lines)
-			if id := matchDockerCurrentContainerID(strLines); id != "" {
-				return id
-			} else if id := matchECSCurrentContainerID(strLines); id != "" {
-				return id
+	// We try to match a 64 character hex string starting with the hostname first
+	for _, filepath := range filepaths {
+		file, err := os.Open(filepath)
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Split(bufio.ScanLines)
+		for scanner.Scan() {
+			_, lines, err := bufio.ScanLines([]byte(scanner.Text()), true)
+			if err == nil {
+				strLines := string(lines)
+				if id = matchContainerIDWithHostname(strLines); len(id) == 64 {
+					return
+				}
 			}
 		}
 	}
 
+	// If we didn't get any ID that matches the hostname, fall back to matching the first 64 character hex string
+	for _, filepath := range filepaths {
+		file, err := os.Open(filepath)
+		if err != nil {
+			continue
+		}
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		scanner.Split(bufio.ScanLines)
+		for scanner.Scan() {
+			_, lines, err := bufio.ScanLines([]byte(scanner.Text()), true)
+			if err == nil {
+				strLines := string(lines)
+				if id = matchContainerID("([[:alnum:]]{64})", strLines); len(id) == 64 {
+					return
+				}
+			}
+		}
+	}
+
+	return
+}
+
+func matchContainerIDWithHostname(lines string) string {
+	hostname := os.Getenv("HOSTNAME")
+	re := regexp.MustCompilePOSIX("^[[:alnum:]]{12}$")
+
+	if re.MatchString(hostname) {
+		regex := fmt.Sprintf("(%s[[:alnum:]]{52})", hostname)
+
+		return matchContainerID(regex, lines)
+	}
 	return ""
 }
 
-func matchDockerCurrentContainerID(lines string) string {
-	regex := "/docker[/-]([[:alnum:]]{64})(\\.scope)?$"
-	re := regexp.MustCompilePOSIX(regex)
+func matchContainerID(regex, lines string) string {
+	// Attempt to detect if we're on a line from a /proc/<pid>/mountinfo file and modify the regexp accordingly
+	// https://www.kernel.org/doc/Documentation/filesystems/proc.txt section 3.5
+	re := regexp.MustCompilePOSIX("^[0-9]+ [0-9]+ [0-9]+:[0-9]+ /")
+	if re.MatchString(lines) {
+		regex = fmt.Sprintf("containers/%v", regex)
+	}
 
+	re = regexp.MustCompilePOSIX(regex)
 	if re.MatchString(lines) {
 		submatches := re.FindStringSubmatch(string(lines))
 		containerID := submatches[1]
 
 		return containerID
 	}
-	return ""
-}
-
-func matchECSCurrentContainerID(lines string) string {
-	regex := "/ecs\\/[^\\/]+\\/(.+)$"
-	re := regexp.MustCompilePOSIX(regex)
-
-	if re.MatchString(string(lines)) {
-		submatches := re.FindStringSubmatch(string(lines))
-		containerID := submatches[1]
-
-		return containerID
-	}
-
 	return ""
 }

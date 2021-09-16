@@ -4,9 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
 	"reflect"
 	"testing"
 	"text/template"
+
+	"github.com/stretchr/testify/assert"
 )
 
 type templateTestList []struct {
@@ -33,18 +38,49 @@ func (tests templateTestList) run(t *testing.T, prefix string) {
 	}
 }
 
-func TestContains(t *testing.T) {
+func TestGetArrayValues(t *testing.T) {
+	values := []string{"foor", "bar", "baz"}
+	var expectedType *reflect.Value
+
+	arrayValues, err := getArrayValues("testFunc", values)
+	assert.NoError(t, err)
+	assert.IsType(t, expectedType, arrayValues)
+	assert.Equal(t, "bar", arrayValues.Index(1).String())
+
+	arrayValues, err = getArrayValues("testFunc", &values)
+	assert.NoError(t, err)
+	assert.IsType(t, expectedType, arrayValues)
+	assert.Equal(t, "baz", arrayValues.Index(2).String())
+
+	arrayValues, err = getArrayValues("testFunc", "foo")
+	assert.Error(t, err)
+	assert.Nil(t, arrayValues)
+}
+
+func TestContainsString(t *testing.T) {
 	env := map[string]string{
 		"PORT": "1234",
 	}
 
-	if !contains(env, "PORT") {
-		t.Fail()
+	assert.True(t, contains(env, "PORT"))
+	assert.False(t, contains(env, "MISSING"))
+}
+
+func TestContainsInteger(t *testing.T) {
+	env := map[int]int{
+		42: 1234,
 	}
 
-	if contains(env, "MISSING") {
-		t.Fail()
-	}
+	assert.True(t, contains(env, 42))
+	assert.False(t, contains(env, "WRONG TYPE"))
+	assert.False(t, contains(env, 24))
+}
+
+func TestContainsNilInput(t *testing.T) {
+	var env interface{} = nil
+
+	assert.False(t, contains(env, 0))
+	assert.False(t, contains(env, ""))
 }
 
 func TestKeys(t *testing.T) {
@@ -87,38 +123,34 @@ func TestKeysNil(t *testing.T) {
 }
 
 func TestIntersect(t *testing.T) {
-	if len(intersect([]string{"foo.fo.com", "bar.com"}, []string{"foo.bar.com"})) != 0 {
-		t.Fatal("Expected no match")
-	}
+	i := intersect([]string{"foo.fo.com", "bar.com"}, []string{"foo.bar.com"})
+	assert.Len(t, i, 0, "Expected no match")
 
-	if len(intersect([]string{"foo.fo.com", "bar.com"}, []string{"bar.com", "foo.com"})) != 1 {
-		t.Fatal("Expected only one match")
-	}
+	i = intersect([]string{"foo.fo.com", "bar.com"}, []string{"bar.com", "foo.com"})
+	assert.Len(t, i, 1, "Expected exactly one match")
 
-	if len(intersect([]string{"foo.com"}, []string{"bar.com", "foo.com"})) != 1 {
-		t.Fatal("Expected only one match")
-	}
+	i = intersect([]string{"foo.com"}, []string{"bar.com", "foo.com"})
+	assert.Len(t, i, 1, "Expected exactly one match")
 
-	if len(intersect([]string{"foo.fo.com", "foo.com", "bar.com"}, []string{"bar.com", "foo.com"})) != 2 {
-		t.Fatal("Expected two matches")
-	}
+	i = intersect([]string{"foo.fo.com", "foo.com", "bar.com"}, []string{"bar.com", "foo.com"})
+	assert.Len(t, i, 2, "Expected exactly two matches")
 }
 
 func TestGroupByExistingKey(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -126,39 +158,31 @@ func TestGroupByExistingKey(t *testing.T) {
 		},
 	}
 
-	groups, _ := groupBy(containers, "Env.VIRTUAL_HOST")
-	if len(groups) != 2 {
-		t.Fail()
-	}
+	groups, err := groupBy(containers, "Env.VIRTUAL_HOST")
 
-	if len(groups["demo1.localhost"]) != 2 {
-		t.Fail()
-	}
-
-	if len(groups["demo2.localhost"]) != 1 {
-		t.FailNow()
-	}
-	if groups["demo2.localhost"][0].(RuntimeContainer).ID != "3" {
-		t.Fail()
-	}
+	assert.NoError(t, err)
+	assert.Len(t, groups, 2)
+	assert.Len(t, groups["demo1.localhost"], 2)
+	assert.Len(t, groups["demo2.localhost"], 1)
+	assert.Equal(t, "3", groups["demo2.localhost"][0].(RuntimeContainer).ID)
 }
 
 func TestGroupByAfterWhere(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 				"EXTERNAL":     "true",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 				"EXTERNAL":     "true",
@@ -168,48 +192,78 @@ func TestGroupByAfterWhere(t *testing.T) {
 	}
 
 	filtered, _ := where(containers, "Env.EXTERNAL", "true")
-	groups, _ := groupBy(filtered, "Env.VIRTUAL_HOST")
+	groups, err := groupBy(filtered, "Env.VIRTUAL_HOST")
 
-	if len(groups) != 2 {
-		t.Fail()
+	assert.NoError(t, err)
+	assert.Len(t, groups, 2)
+	assert.Len(t, groups["demo1.localhost"], 1)
+	assert.Len(t, groups["demo2.localhost"], 1)
+	assert.Equal(t, "3", groups["demo2.localhost"][0].(RuntimeContainer).ID)
+}
+
+func TestGroupByKeys(t *testing.T) {
+	containers := []*RuntimeContainer{
+		{
+			Env: map[string]string{
+				"VIRTUAL_HOST": "demo1.localhost",
+			},
+			ID: "1",
+		},
+		{
+			Env: map[string]string{
+				"VIRTUAL_HOST": "demo1.localhost",
+			},
+			ID: "2",
+		},
+		{
+			Env: map[string]string{
+				"VIRTUAL_HOST": "demo2.localhost",
+			},
+			ID: "3",
+		},
 	}
 
-	if len(groups["demo1.localhost"]) != 1 {
-		t.Fail()
-	}
+	expected := []string{"demo1.localhost", "demo2.localhost"}
+	groups, err := groupByKeys(containers, "Env.VIRTUAL_HOST")
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, expected, groups)
 
-	if len(groups["demo2.localhost"]) != 1 {
-		t.FailNow()
-	}
-	if groups["demo2.localhost"][0].(RuntimeContainer).ID != "3" {
-		t.Fail()
-	}
+	expected = []string{"1", "2", "3"}
+	groups, err = groupByKeys(containers, "ID")
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, expected, groups)
+}
+
+func TestGeneralizedGroupByError(t *testing.T) {
+	groups, err := groupBy("string", "")
+	assert.Error(t, err)
+	assert.Nil(t, groups)
 }
 
 func TestGroupByLabel(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.docker.compose.project": "one",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.docker.compose.project": "two",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.docker.compose.project": "one",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			ID: "4",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.docker.compose.project": "",
 			},
@@ -218,44 +272,37 @@ func TestGroupByLabel(t *testing.T) {
 	}
 
 	groups, err := groupByLabel(containers, "com.docker.compose.project")
-	if err != nil {
-		t.FailNow()
-	}
 
-	if len(groups) != 3 {
-		t.Fail()
-	}
+	assert.NoError(t, err)
+	assert.Len(t, groups, 3)
+	assert.Len(t, groups["one"], 2)
+	assert.Len(t, groups[""], 1)
+	assert.Len(t, groups["two"], 1)
+	assert.Equal(t, "2", groups["two"][0].(RuntimeContainer).ID)
+}
 
-	if len(groups["one"]) != 2 {
-		t.Fail()
-	}
-	if len(groups[""]) != 1 {
-		t.Fail()
-	}
-
-	if len(groups["two"]) != 1 {
-		t.FailNow()
-	}
-	if groups["two"][0].(RuntimeContainer).ID != "2" {
-		t.Fail()
-	}
+func TestGroupByLabelError(t *testing.T) {
+	strings := []string{"foo", "bar", "baz"}
+	groups, err := groupByLabel(strings, "")
+	assert.Error(t, err)
+	assert.Nil(t, groups)
 }
 
 func TestGroupByMulti(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost,demo3.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -288,39 +335,39 @@ func TestGroupByMulti(t *testing.T) {
 
 func TestWhere(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 			Addresses: []Address{
-				Address{
+				{
 					IP:    "172.16.42.1",
 					Port:  "80",
 					Proto: "tcp",
 				},
 			},
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
 			ID: "2",
 			Addresses: []Address{
-				Address{
+				{
 					IP:    "172.16.42.1",
 					Port:  "9999",
 					Proto: "tcp",
 				},
 			},
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo3.localhost",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -353,39 +400,39 @@ func TestWhere(t *testing.T) {
 
 func TestWhereNot(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 			Addresses: []Address{
-				Address{
+				{
 					IP:    "172.16.42.1",
 					Port:  "80",
 					Proto: "tcp",
 				},
 			},
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
 			ID: "2",
 			Addresses: []Address{
-				Address{
+				{
 					IP:    "172.16.42.1",
 					Port:  "9999",
 					Proto: "tcp",
 				},
 			},
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo3.localhost",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -418,27 +465,27 @@ func TestWhereNot(t *testing.T) {
 
 func TestWhereExist(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 				"VIRTUAL_PATH": "/api",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo3.localhost",
 				"VIRTUAL_PATH": "/api",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_PROTO": "https",
 			},
@@ -458,27 +505,27 @@ func TestWhereExist(t *testing.T) {
 
 func TestWhereNotExist(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 				"VIRTUAL_PATH": "/api",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo3.localhost",
 				"VIRTUAL_PATH": "/api",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_PROTO": "https",
 			},
@@ -498,25 +545,25 @@ func TestWhereNotExist(t *testing.T) {
 
 func TestWhereSomeMatch(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost,demo4.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "bar,demo3.localhost,foo",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -536,25 +583,25 @@ func TestWhereSomeMatch(t *testing.T) {
 
 func TestWhereRequires(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost,demo4.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "bar,demo3.localhost,foo",
 			},
 			ID: "3",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -574,14 +621,14 @@ func TestWhereRequires(t *testing.T) {
 
 func TestWhereLabelExists(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.foo": "foo",
 				"com.example.bar": "bar",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.bar": "bar",
 			},
@@ -600,14 +647,14 @@ func TestWhereLabelExists(t *testing.T) {
 
 func TestWhereLabelDoesNotExist(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.foo": "foo",
 				"com.example.bar": "bar",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.bar": "bar",
 			},
@@ -626,14 +673,14 @@ func TestWhereLabelDoesNotExist(t *testing.T) {
 
 func TestWhereLabelValueMatches(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.foo": "foo",
 				"com.example.bar": "bar",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Labels: map[string]string{
 				"com.example.bar": "BAR",
 			},
@@ -709,21 +756,33 @@ func TestTrim(t *testing.T) {
 	}
 }
 
+func TestToLower(t *testing.T) {
+	const str = ".RaNd0m StrinG_"
+	const lowered = ".rand0m string_"
+	assert.Equal(t, lowered, toLower(str), "Unexpected value from toLower()")
+}
+
+func TestToUpper(t *testing.T) {
+	const str = ".RaNd0m StrinG_"
+	const uppered = ".RAND0M STRING_"
+	assert.Equal(t, uppered, toUpper(str), "Unexpected value from toUpper()")
+}
+
 func TestDict(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost,demo3.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -751,19 +810,19 @@ func TestSha1(t *testing.T) {
 
 func TestJson(t *testing.T) {
 	containers := []*RuntimeContainer{
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost",
 			},
 			ID: "1",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo1.localhost,demo3.localhost",
 			},
 			ID: "2",
 		},
-		&RuntimeContainer{
+		{
 			Env: map[string]string{
 				"VIRTUAL_HOST": "demo2.localhost",
 			},
@@ -862,4 +921,47 @@ func TestWhenFalse(t *testing.T) {
 	if when(false, "first", "second") != "second" {
 		t.Fatal("Expected second value")
 	}
+}
+
+func TestDirList(t *testing.T) {
+	dir, err := ioutil.TempDir("", "dirList")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(dir)
+
+	files := map[string]string{
+		"aaa": "",
+		"bbb": "",
+		"ccc": "",
+	}
+	// Create temporary files
+	for key := range files {
+		file, err := ioutil.TempFile(dir, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(file.Name())
+		files[key] = file.Name()
+	}
+
+	expected := []string{
+		path.Base(files["aaa"]),
+		path.Base(files["bbb"]),
+		path.Base(files["ccc"]),
+	}
+
+	filesList, _ := dirList(dir)
+	assert.Equal(t, expected, filesList)
+
+	filesList, _ = dirList("/wrong/path")
+	assert.Equal(t, []string{}, filesList)
+}
+
+func TestCoalesce(t *testing.T) {
+	v := coalesce(nil, "second", "third")
+	assert.Equal(t, "second", v, "Expected second value")
+
+	v = coalesce(nil, nil, nil)
+	assert.Nil(t, v, "Expected nil value")
 }

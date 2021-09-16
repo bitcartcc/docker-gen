@@ -1,21 +1,27 @@
-FROM golang:1.11-alpine3.8 as builder
+# Build docker-gen from scratch
+FROM golang:1.17.1-alpine as go-builder
 
-RUN apk add --no-cache --update git make gcc alpine-sdk 
+ARG VERSION=main
 
-WORKDIR /go/src/github.com/jwilder/docker-gen
-COPY Makefile Makefile
-COPY GLOCKFILE GLOCKFILE
-RUN make get-deps
+WORKDIR /build
+
+# Install the dependencies
 COPY . .
-RUN TAG=$(git describe --tags) && \
-    export LDFLAGS="-X main.buildVersion=${TAG}" && \
-    GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -a -tags netgo -installsuffix netgo -o /usr/local/bin/docker-gen ./cmd/docker-gen
+RUN go mod download -json
 
-FROM alpine:3.8
+# Build the docker-gen executable
+RUN CGO_ENABLED=0 go build -ldflags "-X main.buildVersion=${VERSION}" -o docker-gen ./cmd/docker-gen
 
-COPY --from=builder /usr/local/bin/docker-gen /usr/local/bin/docker-gen
+FROM alpine:3.13
 
-ENV VERSION 0.7.5
+LABEL maintainer="Jason Wilder <mail@jasonwilder.com>"
+
 ENV DOCKER_HOST unix:///tmp/docker.sock
+
+# Install packages required by the image
+RUN apk add --no-cache --virtual .bin-deps openssl
+
+# Install docker-gen from build stage
+COPY --from=go-builder /build/docker-gen /usr/local/bin/docker-gen
 
 ENTRYPOINT ["/usr/local/bin/docker-gen"]

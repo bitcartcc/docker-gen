@@ -1,4 +1,11 @@
+.git
+.github
 docker-gen
 .dockerignore
 dist
+examples
+LICENSE
+Makefile
+README.md
+templates
 *.gz
