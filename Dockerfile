@@ -1,5 +1,5 @@
 # Build docker-gen from scratch
-FROM golang:1.17.5-alpine as go-builder
+FROM golang:1.17.6-alpine as go-builder
 
 ARG VERSION=main
 
@@ -13,8 +13,6 @@ RUN go mod download
 RUN GOOS=linux CGO_ENABLED=0 go build -ldflags "-X main.buildVersion=${VERSION}" -o docker-gen ./cmd/docker-gen
 
 FROM alpine:3.13
-
-LABEL maintainer="Jason Wilder <mail@jasonwilder.com>"
 
 ENV DOCKER_HOST unix:///tmp/docker.sock
 
