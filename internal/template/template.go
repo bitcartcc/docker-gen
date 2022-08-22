@@ -115,6 +115,22 @@ func removeBlankLines(reader io.Reader, writer io.Writer) {
 	bwriter.Flush()
 }
 
+func filterByNetwork(config config.Config, containers context.Context) context.Context {
+	if config.FilterNetwork == "" {
+		return containers
+	} else {
+		filteredContainers := context.Context{}
+		for _, container := range containers {
+			for _, network := range container.Networks {
+				if network.Name == config.FilterNetwork {
+					filteredContainers = append(filteredContainers, container)
+				}
+			}
+		}
+		return filteredContainers
+	}
+}
+
 func filterRunning(config config.Config, containers context.Context) context.Context {
 	if config.IncludeStopped {
 		return containers
@@ -130,7 +146,7 @@ func filterRunning(config config.Config, containers context.Context) context.Con
 }
 
 func GenerateFile(config config.Config, containers context.Context) bool {
-	filteredRunningContainers := filterRunning(config, containers)
+	filteredRunningContainers := filterRunning(config, filterByNetwork(config, containers))
 	filteredContainers := context.Context{}
 	if config.OnlyPublished {
 		for _, container := range filteredRunningContainers {

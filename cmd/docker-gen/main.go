@@ -38,6 +38,7 @@ var (
 	tlsKey                string
 	tlsCaCert             string
 	tlsVerify             bool
+	filterNetwork         string
 )
 
 func (strings *stringslice) String() string {
@@ -110,6 +111,7 @@ func initFlags() {
 	flag.StringVar(&tlsKey, "tlskey", filepath.Join(certPath, "key.pem"), "path to TLS client key file")
 	flag.StringVar(&tlsCaCert, "tlscacert", filepath.Join(certPath, "ca.pem"), "path to TLS CA certificate file")
 	flag.BoolVar(&tlsVerify, "tlsverify", os.Getenv("DOCKER_TLS_VERIFY") != "", "verify docker daemon's TLS certicate")
+	flag.StringVar(&filterNetwork, "filter-network", "", "filter containers by network name")
 
 	flag.Usage = usage
 	flag.Parse()
@@ -157,6 +159,7 @@ func main() {
 			IncludeStopped:   includeStopped,
 			Interval:         interval,
 			KeepBlankLines:   keepBlankLines,
+			FilterNetwork:    filterNetwork,
 		}
 		if notifyContainerID != "" {
 			cfg.NotifyContainers[notifyContainerID] = notifyContainerSignal

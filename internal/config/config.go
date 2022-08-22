@@ -19,6 +19,7 @@ type Config struct {
 	IncludeStopped   bool
 	Interval         int
 	KeepBlankLines   bool
+	FilterNetwork    string
 }
 
 type ConfigFile struct {
